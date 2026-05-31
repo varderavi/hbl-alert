@@ -3,6 +3,8 @@ import pytz
 import xml.etree.ElementTree as ET
 import time
 from datetime import datetime
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ============================================
 # CONFIGURATION
@@ -14,13 +16,12 @@ IST = pytz.timezone("Asia/Kolkata")
 ROUTINE_PRE_VOLUME = 5000  
 
 user_status = {}
-last_alert_sent = None  # એક જ એલર્ટ વારંવાર ન જાય તે માટે
+last_alert_sent = None  
 
 def now_ist():
     return datetime.now(IST)
 
 def is_market_hours():
-    # ⏱️ રિયલ-ટાઇમ માર્કેટ અવર્સ (સવારે ૦૯:૧૫ થી સાંજે ૦૩:૩૦)
     n = now_ist()
     current_time = n.hour * 100 + n.minute
     return 915 <= current_time <= 1530
@@ -146,7 +147,7 @@ def generate_advanced_report(symbol, interval="5m", is_crypto=False):
     if len(closes) > 21 and ema9 and ema21 and rsi != "N/A":
         if price > tf_res and rsi >= 55 and vol_ratio >= 1.5:
             sentiment = "🚀 STRONG BULLISH"
-            action = f"🟢 <b>TREND:</b> {interval} ચાર્ટ પર બ્રેકઆઉટ થયો છે. ટ્રેન્ડ જોરદાર અપ છે."
+            action = f"🟢 <b>TREND:</b> {interval} ચાર્ટ પર બ્રેકઆઉટ થયો છે."
             suggested_entry = round(tf_res * 1.001, 2)
             suggested_sl = tf_sup
             risk_points = round(suggested_entry - suggested_sl, 2)
@@ -161,7 +162,7 @@ def generate_advanced_report(symbol, interval="5m", is_crypto=False):
             
         elif price < tf_sup and rsi <= 42:
             sentiment = "⚠️ BEARISH PRESSURE"
-            action = f"🔴 <b>TREND:</b> {interval} પર સપોર્ટ તૂટ્યો છે. નવી ખરીદી ટાળવી.\n\n🛑 <b>HOLDING EXIT ALERT:</b> નુકસાન રોકવા <b>SELL (Exit)</b> સજેશન છે!"
+            action = f"🔴 <b>TREND:</b> {interval} પર સપોર્ટ તૂટ્યો છે.\n\n🛑 <b>HOLDING EXIT ALERT:</b> નુકસાન રોકવા <b>SELL (Exit)</b> સજેશન છે!"
             suggested_entry = round(tf_sup * 0.999, 2)
             suggested_sl = tf_res
             risk_points = round(suggested_sl - suggested_entry, 2)
@@ -174,7 +175,6 @@ def generate_advanced_report(symbol, interval="5m", is_crypto=False):
     if expiry_text: expiry_text = f"\n\n{expiry_text}"
     
     emoji = "🟢📈" if change >= 0 else "🔴📉"
-    
     text = f"""{emoji} <b>{name} LIVE REPORT ({interval})</b>\n\n💰 <b>Live Price:</b> {sign}{price:,} ({change:+} | {p_change:+}-%)\n📉 <b>RSI:</b> {rsi} | 📈 <b>EMA9:</b> {ema9 or 'N/A'}\n------------------------------------------\n🔥 <b>Sentiment:</b> {sentiment}\n👉 <b>મૂડ:</b> {action}\n------------------------------------------\n{entry_logic_text}{expiry_text}{news}\n⏰ {now_ist().strftime('%H:%M:%S IST')}"""
 
     c_type = "1" if is_crypto else "0"
@@ -262,15 +262,37 @@ def handle_search_text(user_text):
     send_telegram_msg(text, reply_markup=markup)
 
 # ============================================
-# 🌐 RENDER SERVER NON-STOP ENGINE (INFINITE)
+# 🌐 RENDER FAKE PORT SERVER LOGIC
 # ============================================
-print("Ultimate Non-Stop Hybrid Engine Active...")
+class FakeServer(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"Bot is Running Successfully!")
+
+def run_fake_web_server():
+    # Render કોઈ પણ પોર્ટ આપશે, આ ઓટોમેટિક બાઈન્ડ કરી લેશે
+    server_address = ('', 10000)
+    httpd = HTTPServer(server_address, FakeServer)
+    print("Fake Web Server started on port 10000 to keep Render happy...")
+    httpd.serve_forever()
+
+# ============================================
+# MAIN APPLICATION THREAD
+# ============================================
+print("Ultimate Non-Stop Hybrid Engine Initiating...")
+
+# ૧. પહેલા ફેક સર્વરને અલગ બેકગ્રાઉન્ડ થ્રેડમાં ચાલુ કરો
+web_thread = threading.Thread(target=run_fake_web_server, daemon=True)
+web_thread.start()
+
+# ૨. હવે મેઈન લૂપ જે નોન-સ્ટોપ ચાલશે
 offset = 0
 last_auto_check = 0
 
 while True:
     try:
-        # ૧. લાઈવ ટેલિગ્રામ રિસ્પોન્સ (દર સેકન્ડે 'Hi' અને બટનો સાંભળશે)
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={offset}&timeout=2"
         r = requests.get(url, timeout=5).json()
         if "result" in r:
@@ -285,7 +307,6 @@ while True:
                 elif "callback_query" in update:
                     handle_callback(update["callback_query"]["id"], update["callback_query"]["data"])
                     
-        # ૨. બેકગ્રાઉન્ડ ઓટોમેશન (દર ૫ સેકન્ડે HBL નોન-સ્ટોપ સ્કેન કરશે)
         current_time = time.time()
         if current_time - last_auto_check >= 5:
             if is_market_hours():
