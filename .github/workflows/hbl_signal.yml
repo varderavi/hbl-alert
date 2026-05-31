@@ -1,24 +1,24 @@
-name: HBLENGINE Signal Agent
+name: HBL Master Super Agent Engine
 
 on:
   schedule:
-    # Every 5 min, Mon-Fri — IST 9:25 to 15:25
-    - cron: '25,30,35,40,45,50,55 3 * * 1-5'
-    - cron: '0,5,10,15,20,25,30,35,40,45,50,55 4-8 * * 1-5'
-    - cron: '0,5,10,15,20,25 9 * * 1-5'
-  workflow_dispatch:
+    # આ સેટિંગ સવારે ૯:૦૫ વાગ્યાથી લઈને સાંજે ૪:૦૦ વાગ્યા સુધી દર ૧૫ મિનિટે રન કરશે
+    - cron: '35/15 3-10 * * 1-5'
 
 jobs:
-  signal:
+  run_agent:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - run: pip install requests pytz -q
-      - name: Run Signal Check
-        env:
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          CHAT_ID: ${{ secrets.CHAT_ID }}
-        run: python hbl_signal_once.py
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: pip install requests pytz
+
+      - name: Execute Super Agent
+        run: python hbl_super_agent.py
