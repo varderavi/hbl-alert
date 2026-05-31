@@ -44,7 +44,7 @@ def get_range_for_interval(interval):
 
 def fetch_live_data(symbol, interval="5m"):
     timeframe_range = get_range_for_interval(interval)
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={timeframe_range}"
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}?range={timeframe_range}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         r = requests.get(url, headers=headers, timeout=5)
@@ -272,14 +272,13 @@ class FakeServer(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is Running Successfully!")
 
 def run_fake_web_server():
-    # Render કોઈ પણ પોર્ટ આપશે, આ ઓટોમેટિક બાઈન્ડ કરી લેશે
     server_address = ('', 10000)
     httpd = HTTPServer(server_address, FakeServer)
-    print("Fake Web Server started on port 10000 to keep Render happy...")
+    print("Fake Web Server started on port 10000...")
     httpd.serve_forever()
 
 # ============================================
-# MAIN APPLICATION THREAD
+# MAIN APPLICATION THREAD (24/7 NON-STOP)
 # ============================================
 print("Ultimate Non-Stop Hybrid Engine Initiating...")
 
@@ -309,8 +308,14 @@ while True:
                     
         current_time = time.time()
         if current_time - last_auto_check >= 5:
+            # 🚀 જો માર્કેટ ચાલુ હોય તો HBL ઓટોમેટિક એલર્ટ સિસ્ટમ રન થશે
             if is_market_hours():
                 check_and_send_auto_alerts()
+            else:
+                # 🪙 રાત્રે કે શનિ-રવિમાં માર્કેટ બંધ હોય ત્યારે આ લાઇન દર ૫ સેકન્ડે 
+                # Bitcoin નો લાઈવ ડેટા ખેંચશે જેથી Render નું એન્જિન ક્યારેય ઊંઘે નહીં!
+                fetch_live_data("BTC-USD", "5m")
+                
             last_auto_check = current_time
 
     except Exception as e:
