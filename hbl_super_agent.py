@@ -44,7 +44,8 @@ def get_range_for_interval(interval):
 
 def fetch_live_data(symbol, interval="5m"):
     timeframe_range = get_range_for_interval(interval)
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}?range={timeframe_range}"
+    # 🎯 FIX: બીજા '?' ને હટાવીને '&' લગાવી દીધું છે જેથી Yahoo Finance ડેટા પ્રોપર આપે
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={timeframe_range}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         r = requests.get(url, headers=headers, timeout=5)
