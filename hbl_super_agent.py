@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 import threading
 import os
-import difflib  # સ્પેલિંગ ચેક કરવા અને ઓટો-કરેક્ટ કરવા માટે
+import difflib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ============================================
@@ -19,7 +19,6 @@ IST = pytz.timezone("Asia/Kolkata")
 user_status = {}
 last_alert_sent = None  
 
-# મોસ્ટ પોપ્યુલર ઇન્ડિયન સ્ટોક્સનું માસ્ટર લિસ્ટ
 POPULAR_STOCKS = {
     "HBL POWER": "HBLENGINE.NS",
     "HBL": "HBLENGINE.NS",
@@ -104,59 +103,71 @@ def fetch_live_data(symbol, interval="5m"):
         return None, [], [], [], [], None, symbol, None, None, 0
 
 # ============================================
-# 📊 MATHEMATICAL INDICATORS ENGINE
+# 📊 MATHEMATICAL INDICATORS ENGINE (FIXED)
 # ============================================
 def calc_ema(data, p):
     if len(data) < p: return None
-    k = 2/(p+1); e = sum(data[:p])/p
-    for v in data[p:]: e = v*k + e*(1-k)
+    k = 2 / (p + 1)
+    e = sum(data[:p]) / p
+    for v in data[p:]:
+        e = v * k + e * (1 - k)
     return round(e, 2)
 
 def calc_rsi_list(data, p=14):
-    if len(data) < p+1: return []
+    if len(data) < p + 1: return []
     rsi_history = []
-    gains = [max(data[i]-data[i-1], 0) for i in range(1, len(data))]
-    losses = [max(data[i-1]-data[i], 0) for i in range(1, len(data))]
-    
-    ag = sum(gains[:p])/p
-    al = sum(losses[:p])/p
-    # 🎯 FIX: કૌંસ વ્યવસ્થિત પૂરો કરી દીધો છે, હવે એરર નહીં આવે
-    rsi_history.append(100 - (100 / (1 + ag / al)) if al else 100.0)
+    gains = []
+    losses = []
+    for i in range(1, len(data)):
+        diff = data[i] - data[i - 1]
+        if diff > 0:
+            gains.append(diff)
+            losses.append(0.0)
+        else:
+            gains.append(0.0)
+            losses.append(abs(diff))
+            
+    ag = sum(gains[:p]) / p
+    al = sum(losses[:p]) / p
+    rsi_history.append(100.0 - (100.0 / (1.0 + ag / al)) if al else 100.0)
     
     for i in range(p, len(gains)):
-        ag = (ag * (p-1) + gains[i]) / p
-        al = (al * (p-1) + losses[i]) / p
-        rsi_history.append(100 - (100 / (1 + ag / al)) if al else 100.0)
+        ag = (ag * (p - 1) + gains[i]) / p
+        al = (al * (p - 1) + losses[i]) / p
+        rsi_history.append(100.0 - (100.0 / (1.0 + ag / al)) if al else 100.0)
     return rsi_history
 
 def calc_stoch_rsi(closes, p=14, k_p=3, d_p=3):
     rsi_vals = calc_rsi_list(closes, p)
     if len(rsi_vals) < p: return "N/A", "N/A"
     stoch_rsi_list = []
-    for i in range(p, len(rsi_vals)+1):
-        window = rsi_vals[i-p:i]
+    for i in range(p, len(rsi_vals) + 1):
+        window = rsi_vals[i - p:i]
         if not window: continue
         low_rsi = min(window)
         high_rsi = max(window)
         diff = high_rsi - low_rsi
-        stoch_val = ((rsi_vals[i-1] - low_rsi) / diff * 100) if diff != 0 else 50.0
+        stoch_val = ((rsi_vals[i - 1] - low_rsi) / diff * 100.0) if diff != 0 else 50.0
         stoch_rsi_list.append(stoch_val)
     if len(stoch_rsi_list) < k_p: return "N/A", "N/A"
-    k_vals = [sum(stoch_rsi_list[i-k_p:i])/k_p for i in range(k_p, len(stoch_rsi_list)+1)]
+    k_vals = [sum(stoch_rsi_list[i - k_p:i]) / k_p for i in range(k_p, len(stoch_rsi_list) + 1)]
     if len(k_vals) < d_p: return round(k_vals[-1], 1), "N/A"
-    d_val = sum(k_vals[-d_p:])/d_p
+    d_val = sum(k_vals[-d_p:]) / d_p
     return round(k_vals[-1], 1), round(d_val, 1)
 
 def calc_macd(closes, fast=12, slow=26, signal=9):
     if len(closes) < slow + signal: return "N/A", "N/A"
     macd_line = []
-    for i in range(slow, len(closes)+1):
+    for i in range(slow, len(closes) + 1):
         f_ema = calc_ema(closes[:i], fast)
         s_ema = calc_ema(closes[:i], slow)
-        if f_ema and s_ema: macd_line.append(f_ema - s_ema)
+        if f_ema is not None and s_ema is not None: 
+            macd_line.append(f_ema - s_ema)
     if len(macd_line) < signal: return "N/A", "N/A"
     signal_line = calc_ema(macd_line, signal)
-    return round(macd_line[-1], 2), round(signal_line, 2)
+    if macd_line and signal_line is not None:
+        return round(macd_line[-1], 2), round(signal_line, 2)
+    return "N/A", "N/A"
 
 def calc_vwap(highs, lows, closes, volumes):
     if not closes or len(closes) != len(volumes): return None
@@ -171,8 +182,8 @@ def calc_vwap(highs, lows, closes, volumes):
 def calc_supertrend(highs, lows, closes, p=10, mult=3):
     if len(closes) < p: return "NEUTRAL"
     tr_sum = 0
-    for i in range(len(closes)-p, len(closes)):
-        tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
+    for i in range(len(closes) - p, len(closes)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
         tr_sum += tr
     atr = tr_sum / p
     mid = (highs[-1] + lows[-1]) / 2
@@ -367,7 +378,7 @@ def send_main_menu():
             [{"text": "🔥 MIDCAP 100", "callback_data": "m_midcap"}, {"text": "🔍 Search Stock", "callback_data": "m_search"}]
         ]
     }
-    send_telegram_msg("👋 <b>નમસ્તે રવિ! (Ultimate Pro Indicator Engine)</b>\n\nસર્વર ૨૪/૭ લાઈવ છે. સ્માર્ટ સર્ચ એક્ટિવેટેધ છે. રિપોર્ટ જુઓ:", reply_markup=markup)
+    send_telegram_msg("👋 <b>નમસ્તે રવિ! (Ultimate Pro Indicator Engine)</b>\n\nસર્વર ૨૪/૭ લાઈવ છે. સ્માર્ટ સર્ચ એક્ટિવેટેડ છે. રિપોર્ટ જુઓ:", reply_markup=markup)
 
 def handle_callback(callback_id, data):
     text, markup = "", None
