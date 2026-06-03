@@ -6,18 +6,17 @@ from datetime import datetime
 import threading
 import os
 import difflib
+import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # ============================================
 # CONFIGURATION & DICTIONARY
 # ============================================
-BOT_TOKEN = "8874026729:AAEgzZr0UslgaKGdPiUjZMONNuFCKL-pqsY"
-# 🎯 જેકપોટ બ્રેકઆઉટના ઓટોમેટિક રિયલ-ટાઇમ એલર્ટ્સ માત્ર તમારા પર્સનલ આઈડી પર જ આવશે
+BOT_TOKEN = "8907497350:AAHSJtlYPpkW0FAobFDx9wgNcl6MO2jngU0"
 CHAT_ID   = "1358803794"
 
 IST = pytz.timezone("Asia/Kolkata")
 
-# 👥 દરેક મિત્રનું સર્ચ સ્ટેટસ અલગ રાખવા માટેનું નવું ડાયનેમિક સેટિંગ
 user_status = {}
 last_alert_sent = None  
 
@@ -299,6 +298,7 @@ def generate_advanced_report(symbol, interval="5m", is_crypto=False):
     c_type = "1" if is_crypto else "0"
     markup = {
         "inline_keyboard": [
+            [{"text": "⚡ HBL Power", "callback_data": f"tf_{symbol}_{interval}_{c_type}_5m"}],
             [{"text": "⚡ 1 Min", "callback_data": f"tf_{symbol}_{interval}_{c_type}_1m"},
              {"text": "⏱️ 5 Min", "callback_data": f"tf_{symbol}_{interval}_{c_type}_5m"},
              {"text": "⏱️ 15 Min", "callback_data": f"tf_{symbol}_{interval}_{c_type}_15m"}],
@@ -319,7 +319,6 @@ def handle_search_text(user_text, current_chat_id):
     query = user_text.upper().strip()
     str_chat_id = str(current_chat_id)
     
-    # જો આ યુઝરે પહેલા સર્ચ બટન દબાવ્યું હોય, તો એનું સ્ટેટસ ક્લિયર કરીને ડાયરેક્ટ સર્ચ કરશે
     if user_status.get(str_chat_id) == "WAITING_FOR_SEARCH":
         user_status[str_chat_id] = None
     
@@ -353,10 +352,14 @@ def handle_search_text(user_text, current_chat_id):
         send_telegram_msg(f"❌ <b>સ્ટોક ન મળ્યો!</b>\n\n'<b>{query}</b>' નામનો કોઈ સ્ટોક ઇન્ડિયન માર્કેટમાં મળ્યો નથી.", current_chat_id, reply_markup=fallback_markup)
 
 def send_telegram_msg(text, current_chat_id, reply_markup=None):
+    if not BOT_TOKEN: return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": str(current_chat_id), "text": text, "parse_mode": "HTML"}
     if reply_markup: payload["reply_markup"] = reply_markup
-    requests.post(url, json=payload)
+    try:
+        requests.post(url, json=payload, timeout=5)
+    except:
+        pass
 
 def send_main_menu(current_chat_id):
     markup = {
@@ -397,25 +400,34 @@ def handle_callback(callback_id, data, current_chat_id):
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": callback_id})
 
 # ============================================
-# REAL-TIME BACKGROUND ALERTS
+# 🎯 RE-CONFIRMED REAL-TIME ALERTS ENGINE
 # ============================================
-def check_and_send_auto_alerts():
+def background_alerts_worker():
     global last_alert_sent
-    res = fetch_live_data("HBLENGINE.NS", "5m")
-    price = res[0]
-    if not price: return
-    closes, highs, lows, volumes, _, _, tf_res, tf_sup, vol_ratio = res[1:]
-    
-    st_trend = calc_supertrend(highs, lows, closes)
-    rsi_vals = calc_rsi_list(closes)
-    rsi = rsi_vals[-1] if rsi_vals else 50
-    current_minute = now_ist().strftime("%H:%M")
-    
-    if price > tf_res and rsi >= 55 and vol_ratio >= 2.0 and st_trend == "BULLISH":
-        if last_alert_sent != f"BUY_{current_minute}":
-            msg = f"🔥 <b>[ALGO-BOOST] HBL જેકપોટ બ્રેકઆઉટ!</b>\n\n💰 <b>Live Price:</b> ₹{price}\n⚡ <b>Supertrend:</b> BULLISH\n📊 <b>Vol Boost:</b> {vol_ratio}x\n🚧 <b>Res Broken:</b> ₹{tf_res}\n\n🚨 <b>Action:</b> BUY!"
-            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
-            last_alert_sent = f"BUY_{current_minute}"
+    print("Background Indicators Loop Thread Started Successfully...")
+    while True:
+        try:
+            if is_market_hours():
+                res = fetch_live_data("HBLENGINE.NS", "5m")
+                price = res[0]
+                if price:
+                    closes, highs, lows, volumes, _, _, tf_res, tf_sup, vol_ratio = res[1:]
+                    st_trend = calc_supertrend(highs, lows, closes)
+                    rsi_vals = calc_rsi_list(closes)
+                    rsi = rsi_vals[-1] if rsi_vals else 50
+                    current_minute = now_ist().strftime("%H:%M")
+                    
+                    if price > tf_res and rsi >= 55 and vol_ratio >= 2.0 and st_trend == "BULLISH":
+                        if last_alert_sent != f"BUY_{current_minute}":
+                            msg = f"🔥 <b>[ALGO-BOOST] HBL જેકપોટ બ્રેકઆઉટ!</b>\n\n💰 <b>Live Price:</b> ₹{price}\n⚡ <b>Supertrend:</b> BULLISH\n📊 <b>Vol Boost:</b> {vol_ratio}x\n🚧 <b>Res Broken:</b> ₹{tf_res}\n\n🚨 <b>Action:</b> BUY!"
+                            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=5)
+                            last_alert_sent = f"BUY_{current_minute}"
+            else:
+                time.sleep(30)
+                continue
+        except:
+            pass
+        time.sleep(15)
 
 class FakeServer(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -435,19 +447,28 @@ def run_fake_web_server():
     httpd.serve_forever()
 
 # ============================================
-# MAIN MULTI-USER LOOP
+# MAIN APPS INITIATION & NON-STOP LOOP
 # ============================================
-print("Multi-User Dynamic Engine Initiating...")
+print("Multi-User Ultra Fast Engine Initiating...")
 web_thread = threading.Thread(target=run_fake_web_server, daemon=True)
 web_thread.start()
 
+alerts_thread = threading.Thread(target=background_alerts_worker, daemon=True)
+alerts_thread.start()
+
+# પેન્ડિંગ જૂનો બેકલોગ સાફ કર્યો
+try:
+    requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset=-1", timeout=5)
+except:
+    pass
+
 offset = 0
-last_auto_check = 0
 
 while True:
     try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={offset}&timeout=2"
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={offset}&timeout=1&limit=10"
         r = requests.get(url, timeout=5).json()
+        
         if "result" in r:
             for update in r["result"]:
                 offset = update["update_id"] + 1
@@ -468,10 +489,10 @@ while True:
                     dynamic_chat_id = cb_obj["message"]["chat"]["id"]
                     handle_callback(cb_obj["id"], cb_obj["data"], dynamic_chat_id)
                     
-        current_time = time.time()
-        if current_time - last_auto_check >= 5:
-            if is_market_hours(): check_and_send_auto_alerts()
-            else: fetch_live_data("BTC-USD", "5m")
-            last_auto_check = current_time
-    except:
+        # 🎯 સુધારો: લૂપને વધુ પડતી સ્પીડમાં ફરીને બ્લોક થતી રોકવા ૧ સેકન્ડનો બ્રેક આપ્યો
+        time.sleep(1)
+                    
+    except Exception as e:
+        print("CRITICAL LOG EXCEPTION:")
+        traceback.print_exc()
         time.sleep(2)
