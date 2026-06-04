@@ -36,7 +36,10 @@ def is_market_hours():
     current_time = n.hour * 100 + n.minute
     return 915 <= current_time <= 1530
 
-def get_range_for_interval(interval):
+def get_range_for_interval(symbol, interval):
+    # 🎯 GIFT NIFTY લગભગ ૨૦ કલાક ચાલે છે, એટલે એનો પૂરો ટ્રેન્ડ પકડવા માટે વધુ ડેટા રેન્જ સેટ કરી
+    if symbol == "GIFTY=F":
+        return "5d"
     if interval == "1m": return "1d"
     elif interval in ["5m", "15m", "30m"]: return "2d"
     elif interval in ["1h", "4h"]: return "1mo"
@@ -45,7 +48,7 @@ def get_range_for_interval(interval):
     return "2d"
 
 def fetch_live_data(symbol, interval="5m"):
-    timeframe_range = get_range_for_interval(interval)
+    timeframe_range = get_range_for_interval(symbol, interval)
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={timeframe_range}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
@@ -58,19 +61,20 @@ def fetch_live_data(symbol, interval="5m"):
         price = res["meta"]["regularMarketPrice"]
         prev_close = res["meta"].get("previousClose", price)
         
-        name = symbol
-        if symbol == "^NSEI": name = "NIFTY 50"
+        if symbol == "HBLENGINE.NS": name = "HBL POWER"
+        elif symbol == "GIFTY=F": name = "GIFT NIFTY (SGX)"
+        elif symbol == "BTC-USD": name = "BITCOIN (BTC)"
+        elif symbol == "^NSEI": name = "NIFTY 50"
         elif symbol == "^NSEBANK": name = "BANK NIFTY"
         elif symbol == "^BSESN": name = "SENSEX"
         elif symbol == "^NSMIDCP": name = "NIFTY MIDCAP 100"
         elif symbol == "^NSE91": name = "NIFTY NEXT 50"
-        elif symbol == "HBLENGINE.NS": name = "HBL POWER"
-        elif symbol == "GIFTY=F": name = "GIFT NIFTY (SGX)"
         elif symbol.endswith(".NS"): name = symbol.replace(".NS", "")
+        else: name = symbol
         
-        recent_highs = highs[-20:] if len(highs) >= 20 else highs
-        recent_lows = lows[-20:] if len(lows) >= 20 else lows
-        recent_vols = volumes[-20:] if len(volumes) >= 20 else volumes
+        recent_highs = highs[-50:] if len(highs) >= 50 else highs
+        recent_lows = lows[-50:] if len(lows) >= 50 else lows
+        recent_vols = volumes[-50:] if len(volumes) >= 50 else volumes
         
         tf_resistance = round(max(recent_highs), 2) if recent_highs else price
         tf_support = round(min(recent_lows), 2) if recent_lows else price
@@ -135,7 +139,10 @@ def generate_advanced_report(symbol, interval="5m", is_crypto=False):
     
     change = round(price - prev_close, 2)
     p_change = round((change / prev_close) * 100, 2)
-    sign = "$" if is_crypto else "₹"
+    
+    if is_crypto or symbol == "BTC-USD": sign = "$"
+    elif symbol == "GIFTY=F": sign = " pts"
+    else: sign = "₹"
     
     bullish_votes = 0; bearish_votes = 0
     if rsi != "N/A" and rsi >= 50: bullish_votes += 1
@@ -149,23 +156,33 @@ def generate_advanced_report(symbol, interval="5m", is_crypto=False):
         
     emoji = "🟢📈" if change >= 0 else "🔴📉"
     
+    price_str = f"{price:,}{sign}" if sign == " pts" else f"{sign}{price:,}"
+    change_str = f"{change:+}{sign}" if sign == " pts" else f"{change:+}"
+    
+    # GIFT NIFTY માટે સ્પેશિયલ ૨૦ કલાક ઇન્ફો ટેક્સ્ટ
+    extra_info = ""
+    if symbol == "GIFTY=F":
+        extra_info = "⏱️ <b>Market Status:</b> ~20 Hours Continuous Live Trading\n"
+    
     text = f"""{emoji} <b>{name} LIVE REPORT ({interval})</b>
 
 📢 <b>ALGO SIGNAL: {live_signal}</b>
 ------------------------------------------
-💰 <b>Price:</b> {sign}{price:,} ({change:+} | {p_change:+}-%)
+💰 <b>Price:</b> {price_str} ({change_str} | {p_change:+}-%)
 📈 <b>EMA9:</b> {ema9 or 'N/A'} | 📉 <b>RSI(14):</b> {rsi}
 ⚡ <b>Supertrend:</b> {st_trend}
-------------------------------------------
+{extra_info}------------------------------------------
 📍 <b>CHART LEVELS ({interval}):</b>
-🚧 <b>Resistance:</b> {sign}{tf_res:,}
-🛡️ <b>Support:</b> {sign}{tf_sup:,}
+🚧 <b>Resistance:</b> {tf_res}
+🛡️ <b>Support:</b> {tf_sup}
 📊 <b>Volume Ratio:</b> {vol_ratio}x
 ⏰ {now_ist().strftime('%H:%M:%S IST')}"""
 
+    c_flag = "1" if (is_crypto or symbol == "BTC-USD") else ("2" if symbol == "GIFTY=F" else "0")
+
     markup = {
         "inline_keyboard": [
-            [{"text": "⚡ Refresh", "callback_data": f"tf_{symbol}_{interval}_{'1' if is_crypto else '0'}_5m"}],
+            [{"text": "⚡ Refresh", "callback_data": f"tf_{symbol}_{interval}_{c_flag}_5m"}],
             [{"text": "🔙 Back to Main Menu", "callback_data": "go_main"}]
         ]
     }
@@ -181,10 +198,14 @@ def handle_search_text(user_text, current_chat_id):
         symbol = POPULAR_STOCKS[query]
     elif query in ["GIFT NIFTY", "GIFTNIFTY", "SGX NIFTY", "SGXNIFTY"]:
         symbol = "GIFTY=F"
+    elif query in ["BTC", "BITCOIN"]:
+        symbol = "BTC-USD"
     else:
         symbol = f"{query}.NS"
         
-    text, markup = generate_advanced_report(symbol, "5m")
+    is_cry = (symbol == "BTC-USD")
+    text, markup = generate_advanced_report(symbol, "5m", is_crypto=is_cry)
+    
     if text:
         send_telegram_msg(text, current_chat_id, reply_markup=markup)
     else:
@@ -203,14 +224,14 @@ def send_telegram_msg(text, current_chat_id, reply_markup=None):
     try: requests.post(url, json=payload, timeout=5)
     except: pass
 
-# 🎯 🛠️ ફિક્સ મેનુ બટન (GIFT NIFTY ઉમેર્યું)
 def send_main_menu(current_chat_id):
     markup = {
         "inline_keyboard": [
-            [{"text": "🚀 GIFT NIFTY (SGX)", "callback_data": "m_gift"}, {"text": "⚡ HBL Power", "callback_data": "m_hbl"}],
-            [{"text": "📊 NIFTY 50", "callback_data": "m_nifty"}, {"text": "📈 BANK NIFTY", "callback_data": "m_bnifty"}],
-            [{"text": "💎 SENSEX", "callback_data": "m_sensex"}, {"text": "🚀 NIFTY NEXT 50", "callback_data": "m_next50"}],
-            [{"text": "🔥 MIDCAP 100", "callback_data": "m_midcap"}, {"text": "🔍 Search Stock", "callback_data": "m_search"}]
+            [{"text": "🚀 GIFT NIFTY (SGX)", "callback_data": "m_gift"}, {"text": "🪙 Bitcoin (24/7)", "callback_data": "m_btc"}],
+            [{"text": "⚡ HBL Power", "callback_data": "m_hbl"}, {"text": "📊 NIFTY 50", "callback_data": "m_nifty"}],
+            [{"text": "📈 BANK NIFTY", "callback_data": "m_bnifty"}, {"text": "💎 SENSEX", "callback_data": "m_sensex"}],
+            [{"text": "🚀 NIFTY NEXT 50", "callback_data": "m_next50"}, {"text": "🔥 MIDCAP 100", "callback_data": "m_midcap"}],
+            [{"text": "🔍 Search Stock", "callback_data": "m_search"}]
         ]
     }
     send_telegram_msg("👋 <b>નમસ્તે રવિ ભાઈ! (Ultimate Pro Engine)</b>\n\nસર્વર ૨૪/૭ લાઈવ છે. રિપોર્ટ જોવા નીચે ક્લિક કરો અથવા કોઈપણ ઇક્વિટીનું નામ લખો:", current_chat_id, reply_markup=markup)
@@ -219,6 +240,7 @@ def handle_callback(callback_id, data, current_chat_id):
     text, markup = "", None
     if data == "m_hbl": text, markup = generate_advanced_report("HBLENGINE.NS", "5m")
     elif data == "m_gift": text, markup = generate_advanced_report("GIFTY=F", "5m")
+    elif data == "m_btc": text, markup = generate_advanced_report("BTC-USD", "5m", is_crypto=True)
     elif data == "m_nifty": text, markup = generate_advanced_report("^NSEI", "5m")
     elif data == "m_bnifty": text, markup = generate_advanced_report("^NSEBANK", "5m")
     elif data == "m_sensex": text, markup = generate_advanced_report("^BSESN", "5m")
@@ -230,7 +252,12 @@ def handle_callback(callback_id, data, current_chat_id):
         return
     elif data.startswith("tf_"):
         parts = data.split("_")
-        text, markup = generate_advanced_report(parts[1], parts[4], is_crypto=(parts[3] == "1"))
+        if parts[3] == "1":
+            text, markup = generate_advanced_report(parts[1], parts[4], is_crypto=True)
+        elif parts[3] == "2":
+            text, markup = generate_advanced_report(parts[1], parts[4], is_crypto=False)
+        else:
+            text, markup = generate_advanced_report(parts[1], parts[4], is_crypto=False)
 
     if text: send_telegram_msg(text, current_chat_id, reply_markup=markup)
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": callback_id})
@@ -245,12 +272,12 @@ def check_and_send_morning_report():
     msg = f"☀️ <b>મોર્નિંગ માર્કેટ મૂડ રિપોર્ટ</b> ☀️\n--------------------------------------\n"
     if g_price and g_close:
         g_chg = round(((g_price - g_close)/g_close)*100, 2)
-        msg += f"🚀 <b>GIFT NIFTY (SGX) પ્રી-ઓપન:</b> ₹{g_price} ({g_chg:+}%)\n"
+        msg += f"🚀 <b>GIFT NIFTY (SGX) પ્રી-ઓપન:</b> {g_price} pts ({g_chg:+}%)\n"
     if h_price and h_close:
         h_chg = round(((h_price - h_close)/h_close)*100, 2)
         msg += f"⚡ <b>HBL POWER પ્રી-ઓપન:</b> ₹{h_price} ({h_chg:+}%)\n"
         
-    msg += f"\n🎯 <b>ટ્રેડિંગ訊 પ્લાન:</b> ૦૯:૧૫ એ માર્કેટ ખુલતા જ આજના એલ્ગો ટ્રિગર્સ એક્ટિવ થઈ જશે."
+    msg += f"\n🎯 <b>ટ્રેડિંગ પ્લાન:</b> ૦૯:૧૫ એ માર્કેટ ખુલતા જ આજના એલ્ગો ટ્રિગર્સ એક્ટિવ થઈ જશે."
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
 
 def background_alerts_worker():
@@ -288,12 +315,10 @@ def background_alerts_worker():
 class FakeServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header("Content-type", "text/html")
         self.end_headers()
         self.wfile.write(b"Bot Engine is Live!")
     def do_HEAD(self):
         self.send_response(200)
-        self.send_header("Content-type", "text/html")
         self.end_headers()
 
 # START THREADS
