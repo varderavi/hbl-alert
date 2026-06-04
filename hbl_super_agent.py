@@ -5,7 +5,6 @@ import time
 from datetime import datetime
 import threading
 import os
-import difflib
 import traceback
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -22,7 +21,6 @@ last_alert_sent = None
 processed_updates = set() 
 pre_market_checked_today = False
 
-# 🎯 ઓટો સર્ચ અને શોર્ટકોડ માટેની લિસ્ટ
 POPULAR_STOCKS = {
     "HBL POWER": "HBLENGINE.NS", "HBL": "HBLENGINE.NS", "WIPRO": "WIPRO.NS", "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS",
     "INFOSYS": "INFY.NS", "INFY": "INFY.NS", "TATA MOTORS": "TATAMOTORS.NS", "TATAMOTORS": "TATAMOTORS.NS", "HDFC BANK": "HDFCBANK.NS",
@@ -61,7 +59,7 @@ def fetch_live_data(symbol, interval="5m"):
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range={timeframe_range}"
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
-        r = requests.get(url, headers=headers, timeout=7) # 🎯 ટાઈમઆઉટ વધાર્યો જેથી સર્ચ ક્યારેય ફેલ ન થાય
+        r = requests.get(url, headers=headers, timeout=7) 
         res = r.json()["chart"]["result"][0]
         closes = [x for x in res["indicators"]["quote"][0]["close"] if x is not None]
         highs  = [x for x in res["indicators"]["quote"][0]["high"] if x is not None]
@@ -95,22 +93,175 @@ def fetch_live_data(symbol, interval="5m"):
     except:
         return None, [], [], [], [], None, symbol, None, None, 0
 
-def get_multi_tf_summary_table(symbol):
-    intervals = ["1m", "5m", "15m", "1h", "1d"]
-    table_text = "\n📋 <b>MULTIPLE TIMEFRAME LEVELS:</b>\n"
-    table_text += "<code>TF    | Resistance | Support   </code>\n"
-    table_text += "<code>-------------------------------</code>\n"
-    for tf in intervals:
-        p, _, hs, ls, _, _, _, res, sup, _ = fetch_live_data(symbol, tf)
-        if p and res and sup:
-            tf_pad = tf.ljust(5)
-            res_pad = f"{res:,}".ljust(11)
-            sup_pad = f"{sup:,}"
-            table_text += f"<code>{tf_pad}| {res_pad}| {sup_pad}</code>\n"
-    return table_text
+# ============================================
+# 📊 REPORT GENERATOR ENGINE
+# ============================================
+def generate_advanced_report(symbol, interval="5m", is_crypto=False):
+    price, closes, highs, lows, volumes, prev_close, name, tf_res, tf_sup, vol_ratio = fetch_live_data(symbol, interval)
+    if not price: return None, None
+    
+    st_trend = calc_supertrend(highs, lows, closes)
+    rsi_vals = calc_rsi_list(closes)
+    rsi = round(rsi_vals[-1], 1) if rsi_vals else "N/A"
+    ema9 = calc_ema(closes, 9)
+    
+    change = round(price - prev_close, 2)
+    p_change = round((change / prev_close) * 100, 2)
+    sign = "$" if is_crypto else "₹"
+    
+    bullish_votes = 0; bearish_votes = 0
+    if rsi != "N/A" and rsi >= 50: bullish_votes += 1
+    elif rsi != "N/A" and rsi < 45: bearish_votes += 1
+    if st_trend == "BULLISH": bullish_votes += 1
+    elif st_trend == "BEARISH": bearish_votes += 1
+
+    if bullish_votes >= 2: live_signal = "🟢 <b>BULLISH ZONE</b>"
+    elif bearish_votes >= 2: live_signal = "🔴 <b>BEARISH ZONE</b>"
+    else: live_signal = "⚖️ <b>SIDEWAYS</b>"
+        
+    emoji = "🟢📈" if change >= 0 else "🔴📉"
+    
+    text = f"""{emoji} <b>{name} LIVE REPORT ({interval})</b>
+
+📢 <b>ALGO SIGNAL: {live_signal}</b>
+------------------------------------------
+💰 <b>Price:</b> {sign}{price:,} ({change:+} | {p_change:+}-%)
+📈 <b>EMA9:</b> {ema9 or 'N/A'} | 📉 <b>RSI(14):</b> {rsi}
+⚡ <b>Supertrend:</b> {st_trend}
+------------------------------------------
+📍 <b>CHART LEVELS ({interval}):</b>
+🚧 <b>Resistance:</b> {sign}{tf_res:,}
+🛡️ <b>Support:</b> {sign}{tf_sup:,}
+📊 <b>Volume Ratio:</b> {vol_ratio}x
+⏰ {now_ist().strftime('%H:%M:%S IST')}"""
+
+    markup = {
+        "inline_keyboard": [
+            [{"text": "⚡ Refresh", "callback_data": f"tf_{symbol}_{interval}_{'1' if is_crypto else '0'}_5m"}],
+            [{"text": "🔙 Back to Main Menu", "callback_data": "go_main"}]
+        ]
+    }
+    return text, markup
 
 # ============================================
-# 📊 MATHEMATICAL INDICATORS ENGINE
+# 🎯 ALL-EQUITY SEARCH ROUTING
+# ============================================
+def handle_search_text(user_text, current_chat_id):
+    query = user_text.upper().strip()
+    
+    if query in POPULAR_STOCKS:
+        symbol = POPULAR_STOCKS[query]
+    elif query in ["GIFT NIFTY", "GIFTNIFTY", "SGX NIFTY", "SGXNIFTY"]:
+        symbol = "GIFTY=F"
+    else:
+        symbol = f"{query}.NS"
+        
+    text, markup = generate_advanced_report(symbol, "5m")
+    if text:
+        send_telegram_msg(text, current_chat_id, reply_markup=markup)
+    else:
+        text, markup = generate_advanced_report(query, "5m")
+        if text:
+            send_telegram_msg(text, current_chat_id, reply_markup=markup)
+        else:
+            fallback_markup = {"inline_keyboard": [[{"text": "🔙 Main Menu", "callback_data": "go_main"}]]}
+            send_telegram_msg(f"❌ <b>સ્ટોક શોધવામાં ભૂલ!</b>\n\n'<b>{query}</b>' નામની કોઈ ઇક્વિટી મળી નથી. કૃપા કરીને સ્પેલિંગ ચેક કરો.", current_chat_id, reply_markup=fallback_markup)
+
+def send_telegram_msg(text, current_chat_id, reply_markup=None):
+    if not BOT_TOKEN: return
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": str(current_chat_id), "text": text, "parse_mode": "HTML"}
+    if reply_markup: payload["reply_markup"] = reply_markup
+    try: requests.post(url, json=payload, timeout=5)
+    except: pass
+
+# 🎯 🛠️ મેઈન મેનુ બટન ફિક્સ (GIFT NIFTY સેટ કર્યું)
+def send_main_menu(current_chat_id):
+    markup = {
+        "inline_keyboard": [
+            [{"text": "⚡ HBL Power", "callback_data": "m_hbl"}, {"text": "🚀 GIFT NIFTY (SGX)", "callback_data": "m_gift"}],
+            [{"text": "📊 NIFTY 50", "callback_data": "m_nifty"}, {"text": "📈 BANK NIFTY", "callback_data": "m_bnifty"}],
+            [{"text": "💎 SENSEX", "callback_data": "m_sensex"}, {"text": "🚀 NIFTY NEXT 50", "callback_data": "m_next50"}],
+            [{"text": "🔥 MIDCAP 100", "callback_data": "m_midcap"}, {"text": "🔍 Search Stock", "callback_data": "m_search"}]
+        ]
+    }
+    send_telegram_msg("👋 <b>નમસ્તે રવિ ભાઈ! (Ultimate Pro Engine)</b>\n\nસર્વર ૨૪/૭ લાઈવ છે. રિપોર્ટ જોવા નીચે ક્લિક કરો અથવા કોઈપણ ઇક્વિટીનું નામ લખો:", current_chat_id, reply_markup=markup)
+
+def handle_callback(callback_id, data, current_chat_id):
+    text, markup = "", None
+    if data == "m_hbl": text, markup = generate_advanced_report("HBLENGINE.NS", "5m")
+    elif data == "m_gift": text, markup = generate_advanced_report("GIFTY=F", "5m")
+    elif data == "m_nifty": text, markup = generate_advanced_report("^NSEI", "5m")
+    elif data == "m_bnifty": text, markup = generate_advanced_report("^NSEBANK", "5m")
+    elif data == "m_sensex": text, markup = generate_advanced_report("^BSESN", "5m")
+    elif data == "m_next50": text, markup = generate_advanced_report("^NSE91", "5m")
+    elif data == "m_midcap": text, markup = generate_advanced_report("^NSMIDCP", "5m")
+    elif data == "go_main": send_main_menu(current_chat_id); return
+    elif data == "m_search":
+        send_telegram_msg("🔍 <b>કોઈપણ શેર સર્ચ કરો:</b>\n\nનામ ટાઈપ કરીને મોકલો (e.g. IRCTC, ZOMATO):", current_chat_id)
+        return
+    elif data.startswith("tf_"):
+        parts = data.split("_")
+        text, markup = generate_advanced_report(parts[1], parts[4], is_crypto=(parts[3] == "1"))
+
+    if text: send_telegram_msg(text, current_chat_id, reply_markup=markup)
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": callback_id})
+
+# ============================================
+# ☀️ MORNING PRE-MARKET TIMING
+# ============================================
+def check_and_send_morning_report():
+    g_price, _, _, _, _, g_close, _, _, _, _ = fetch_live_data("GIFTY=F", "5m")
+    h_price, _, _, _, _, h_close, _, _, _, _ = fetch_live_data("HBLENGINE.NS", "5m")
+    
+    msg = f"☀️ <b>મોર્નિંગ માર્કેટ મૂડ રિપોર્ટ</b> ☀️\n--------------------------------------\n"
+    if g_price and g_close:
+        g_chg = round(((g_price - g_close)/g_close)*100, 2)
+        msg += f"🚀 <b>GIFT NIFTY (SGX) પ્રી-ઓપન:</b> ₹{g_price} ({g_chg:+}%)\n"
+    if h_price and h_close:
+        h_chg = round(((h_price - h_close)/h_close)*100, 2)
+        msg += f"⚡ <b>HBL POWER પ્રી-ઓપન:</b> ₹{h_price} ({h_chg:+}%)\n"
+        
+    msg += f"\n🎯 <b>ટ્રેડિંગ પ્લાન:</b> ૦૯:૧૫ એ માર્કેટ ખુલતા જ આજના એલ્ગો ટ્રિગર્સ એક્ટિવ થઈ જશે."
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
+
+def background_alerts_worker():
+    global last_alert_sent, pre_market_checked_today
+    while True:
+        try:
+            n = now_ist()
+            current_time = n.hour * 100 + n.minute
+            
+            if 908 <= current_time <= 912:
+                if not pre_market_checked_today:
+                    check_and_send_morning_report()
+                    pre_market_checked_today = True
+            
+            if current_time == 0:
+                pre_market_checked_today = False
+                
+            if is_market_hours():
+                res = fetch_live_data("HBLENGINE.NS", "5m")
+                price = res[0]
+                if price:
+                    closes, highs, lows, volumes, _, _, tf_res, tf_sup, vol_ratio = res[1:]
+                    st_trend = calc_supertrend(highs, lows, closes)
+                    current_minute = n.strftime("%H:%M")
+                    
+                    if price >= tf_res and vol_ratio >= 1.3 and st_trend == "BULLISH":
+                        if last_alert_sent != f"BUY_{current_minute}":
+                            msg = f"🔥 <b>[ALGO-BOOST] HBL જેકપોટ બ્રેકઆઉટ ટ્રિગર!</b>\n\n💰 <b>Live Price:</b> ₹{price}\n📊 <b>Vol Jump:</b> {vol_ratio}x\n🚧 <b>Res Broken:</b> ₹{tf_res}\n\n🚨 <b>Action:</b> BUY LONG!"
+                            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
+                            last_alert_sent = f"BUY_{current_minute}"
+            else:
+                time.sleep(30)
+                continue
+        except:
+            pass
+        time.sleep(15)
+
+# ============================================
+# ⚙️ INDICATORS ENGINE
 # ============================================
 def calc_ema(data, p):
     if len(data) < p: return None
@@ -136,253 +287,24 @@ def calc_rsi_list(data, p=14):
         rsi_history.append(100.0 - (100.0 / (1.0 + ag / al)) if al else 100.0)
     return rsi_history
 
-def calc_stoch_rsi(closes, p=14, k_p=3, d_p=3):
-    rsi_vals = calc_rsi_list(closes, p)
-    if len(rsi_vals) < p: return "N/A", "N/A"
-    stoch_rsi_list = []
-    for i in range(p, len(rsi_vals) + 1):
-        window = rsi_vals[i - p:i]
-        if not window: continue
-        low_rsi = min(window)
-        high_rsi = max(window)
-        diff = high_rsi - low_rsi
-        stoch_val = ((rsi_vals[i - 1] - low_rsi) / diff * 100.0) if diff != 0 else 50.0
-        stoch_rsi_list.append(stoch_val)
-    if len(stoch_rsi_list) < k_p: return "N/A", "N/A"
-    k_vals = [sum(stoch_rsi_list[i - k_p:i]) / k_p for i in range(k_p, len(stoch_rsi_list) + 1)]
-    if len(k_vals) < d_p: return round(k_vals[-1], 1), "N/A"
-    d_val = sum(k_vals[-d_p:]) / d_p
-    return round(k_vals[-1], 1), round(d_val, 1)
-
-def calc_macd(closes, fast=12, slow=26, signal=9):
-    if len(closes) < slow + signal: return "N/A", "N/A"
-    macd_line = []
-    for i in range(slow, len(closes) + 1):
-        f_ema = calc_ema(closes[:i], fast)
-        s_ema = calc_ema(closes[:i], slow)
-        if f_ema is not None and s_ema is not None: macd_line.append(f_ema - s_ema)
-    if len(macd_line) < signal: return "N/A", "N/A"
-    signal_line = calc_ema(macd_line, signal)
-    if macd_line and signal_line is not None: return round(macd_line[-1], 2), round(signal_line, 2)
-    return "N/A", "N/A"
-
-def calc_vwap(highs, lows, closes, volumes):
-    if not closes or len(closes) != len(volumes): return None
-    total_pv = 0; total_v = 0
-    for h, l, c, v in zip(highs[-20:], lows[-20:], closes[-20:], volumes[-20:]):
-        typ_price = (h + l + c) / 3
-        total_pv += typ_price * v
-        total_v += v
-    return round(total_pv / total_v, 2) if total_v else closes[-1]
-
-def calc_supertrend(highs, lows, closes, p=10, mult=3):
-    if len(closes) < p: return "NEUTRAL"
-    tr_sum = 0
-    for i in range(len(closes) - p, len(closes)):
-        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
-        tr_sum += tr
-    atr = tr_sum / p
-    mid = (highs[-1] + lows[-1]) / 2
-    upper_band = mid + (mult * atr)
-    lower_band = mid - (mult * atr)
-    if closes[-1] > upper_band: return "BULLISH"
-    elif closes[-1] < lower_band: return "BEARISH"
-    return "NEUTRAL"
-
-# ============================================
-# 📊 REPORT GENERATOR ENGINE
-# ============================================
-def generate_advanced_report(symbol, interval="5m", is_crypto=False):
-    price, closes, highs, lows, volumes, prev_close, name, tf_res, tf_sup, vol_ratio = fetch_live_data(symbol, interval)
-    if not price: return None, None
-    
-    st_trend = calc_supertrend(highs, lows, closes)
-    macd_l, macd_s = calc_macd(closes)
-    stoch_k, stoch_d = calc_stoch_rsi(closes)
-    vwap_val = calc_vwap(highs, lows, closes, volumes) if not is_crypto else None
-    
-    rsi_vals = calc_rsi_list(closes)
-    rsi = round(rsi_vals[-1], 1) if rsi_vals else "N/A"
-    ema9 = calc_ema(closes, 9)
-    
-    change = round(price - prev_close, 2)
-    p_change = round((change / prev_close) * 100, 2)
-    sign = "$" if is_crypto else "₹"
-    
-    bullish_votes = 0; bearish_votes = 0
-    if rsi != "N/A" and rsi >= 50: bullish_votes += 1
-    elif rsi != "N/A" and rsi < 45: bearish_votes += 1
-    if st_trend == "BULLISH": bullish_votes += 1
-    elif st_trend == "BEARISH": bearish_votes += 1
-    if macd_l != "N/A" and macd_s != "N/A" and macd_l > macd_s: bullish_votes += 1
-    elif macd_l != "N/A" and macd_s != "N/A" and macd_l < macd_s: bearish_votes += 1
-
-    if bullish_votes >= 2: live_signal = "🟢 <b>BULLISH ZONE</b>"
-    elif bearish_votes >= 2: live_signal = "🔴 <b>BEARISH ZONE</b>"
-    else: live_signal = "⚖️ <b>SIDEWAYS</b>"
-        
-    emoji = "🟢📈" if change >= 0 else "🔴📉"
-    
-    text = f"""{emoji} <b>{name} LIVE REPORT ({interval})</b>
-
-📢 <b>ALGO SIGNAL: {live_signal}</b>
-------------------------------------------
-💰 <b>Price:</b> {sign}{price:,} ({change:+} | {p_change:+}-%)
-📈 <b>EMA9:</b> {ema9 or 'N/A'} | 📉 <b>RSI(14):</b> {rsi}
-⚡ <b>Supertrend:</b> {st_trend}
-🎛️ <b>MACD Line:</b> {macd_l} (Signal: {macd_s})
-------------------------------------------
-📍 <b>CHART LEVELS ({interval}):</b>
-🚧 <b>Resistance:</b> {sign}{tf_res:,}
-🛡️ <b>Support:</b> {sign}{tf_sup:,}
-📊 <b>Volume Ratio:</b> {vol_ratio}x
-⏰ {now_ist().strftime('%H:%M:%S IST')}"""
-
-    markup = {
-        "inline_keyboard": [
-            [{"text": "⚡ Refresh", "callback_data": f"tf_{symbol}_{interval}_{'1' if is_crypto else '0'}_5m"}],
-            [{"text": "🔙 Back to Main Menu", "callback_data": "go_main"}]
-        ]
-    }
-    return text, markup
-
-# ============================================
-# 🎯 ALL-EQUITY ROBUST SEARCH ROUTING
-# ============================================
-def handle_search_text(user_text, current_chat_id):
-    query = user_text.upper().strip()
-    
-    # શોર્ટકોડ ચેક
-    if query in POPULAR_STOCKS:
-        symbol = POPULAR_STOCKS[query]
-    elif query in ["GIFT NIFTY", "GIFTNIFTY", "SGX NIFTY", "SGXNIFTY"]:
-        symbol = "GIFTY=F"
-    else:
-        # 🎯 ઇક્વિટી ઓટો-રૂટીંગ: કંઈ પણ લખે એની પાછળ સીધું .NS લગાવીને સર્ચ કરશે (e.g. IRCTC -> IRCTC.NS)
-        symbol = f"{query}.NS"
-        
-    text, markup = generate_advanced_report(symbol, "5m")
-    if text:
-        send_telegram_msg(text, current_chat_id, reply_markup=markup)
-    else:
-        # જો ભારતીય માર્કેટમાં ન મળે, તો ઇન્ડેક્સ તરીકે પણ એક વાર છેલ્લો ટ્રાય કરશે
-        text, markup = generate_advanced_report(query, "5m")
-        if text:
-            send_telegram_msg(text, current_chat_id, reply_markup=markup)
-        else:
-            fallback_markup = {"inline_keyboard": [[{"text": "🔙 Main Menu", "callback_data": "go_main"}]]}
-            send_telegram_msg(f"❌ <b>સ્ટોક શોધવામાં ભૂલ!</b>\n\n'<b>{query}</b>' નામની કોઈ સ્ક્રિપ્ટ ઇન્ડિયન માર્કેટમાં મળી નથી. કૃપા કરીને સ્પેલિંગ ચેક કરો.", current_chat_id, reply_markup=fallback_markup)
-
-def send_telegram_msg(text, current_chat_id, reply_markup=None):
-    if not BOT_TOKEN: return
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": str(current_chat_id), "text": text, "parse_mode": "HTML"}
-    if reply_markup: payload["reply_markup"] = reply_markup
-    try: requests.post(url, json=payload, timeout=5)
-    except: pass
-
-def send_main_menu(current_chat_id):
-    markup = {
-        "inline_keyboard": [
-            [{"text": "⚡ HBL Power", "callback_data": "m_hbl"}, {"text": "🚀 GIFT NIFTY (SGX)", "callback_data": "m_gift"}],
-            [{"text": "📊 NIFTY 50", "callback_data": "m_nifty"}, {"text": "📈 BANK NIFTY", "callback_data": "m_bnifty"}],
-            [{"text": "🔍 Search Stock (Any Equity)", "callback_data": "m_search"}]
-        ]
-    }
-    send_telegram_msg("👋 <b>નમસ્તે રવિ ભાઈ! (Ultimate Pro Engine)</b>\n\nગિફ્ટ નિફ્ટી અને ફુલ ઇક્વિટી સર્ચ સેટ થઈ ગયા છે. નીચેથી સિલેક્ટ કરો અથવા સીધું નામ લખો:", current_chat_id, reply_markup=markup)
-
-def handle_callback(callback_id, data, current_chat_id):
-    text, markup = "", None
-    if data == "m_hbl": text, markup = generate_advanced_report("HBLENGINE.NS", "5m")
-    elif data == "m_gift": text, markup = generate_advanced_report("GIFTY=F", "5m")
-    elif data == "m_nifty": text, markup = generate_advanced_report("^NSEI", "5m")
-    elif data == "m_bnifty": text, markup = generate_advanced_report("^NSEBANK", "5m")
-    elif data == "go_main": send_main_menu(current_chat_id); return
-    elif data == "m_search":
-        send_telegram_msg("🔍 <b>ઇન્ડિયન માર્કેટનો કોઈપણ શેર સર્ચ કરો:</b>\n\nનામ ટાઈપ કરીને મોકલો (e.g. IRCTC, ZOMATO, WIPRO):", current_chat_id)
-        return
-    elif data.startswith("tf_"):
-        parts = data.split("_")
-        text, markup = generate_advanced_report(parts[1], parts[4], is_crypto=(parts[3] == "1"))
-
-    if text: send_telegram_msg(text, current_chat_id, reply_markup=markup)
-    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/answerCallbackQuery", json={"callback_query_id": callback_id})
-
-# ============================================
-# ☀️ MORNING PRE-MARKET WITH GIFT NIFTY
-# ============================================
-def check_and_send_morning_report():
-    print("Executing Morning Scanner Thread...")
-    # 🎯 GIFT NIFTY સવારે ઉમેરી દીધું
-    g_price, _, _, _, _, g_close, _, _, _, _ = fetch_live_data("GIFTY=F", "5m")
-    h_price, _, _, _, _, h_close, _, _, _, _ = fetch_live_data("HBLENGINE.NS", "5m")
-    
-    msg = f"☀️ <b>મોર્નિંગ માર્કેટ મૂડ રિપોર્ટ</b> ☀️\n--------------------------------------\n"
-    if g_price and g_close:
-        g_chg = round(((g_price - g_close)/g_close)*100, 2)
-        msg += f"🚀 <b>GIFT NIFTY (SGX) પ્રી-ઓપન:</b> ₹{g_price} ({g_chg:+}%)\n"
-    if h_price and h_close:
-        h_chg = round(((h_price - h_close)/h_close)*100, 2)
-        msg += f"⚡ <b>HBL POWER પ્રી-ઓપન:</b> ₹{h_price} ({h_chg:+}%)\n"
-        
-    msg += f"\n🎯 <b>ટ્રેડિંગ પ્લાન:</b> ૦૯:૧૫ એ માર્કેટ ખુલતા જ આજના એલ્ગો ટ્રિગર્સ એક્ટિવ થઈ જશે."
-    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
-
-# ============================================
-# REAL-TIME BACKGROUND ALERTS THREAD
-# ============================================
-def background_alerts_worker():
-    global last_alert_sent, pre_market_checked_today
-    while True:
-        try:
-            n = now_ist()
-            current_time = n.hour * 100 + n.minute
-            
-            # ⏰ મોર્નિંગ ડેટા ચેકિંગ બરાબર સવારે ૦૯:૦૮ થી ૦૯:૧૨ ની વચ્ચે ચાલશે
-            if 908 <= current_time <= 912:
-                if not pre_market_checked_today:
-                    check_and_send_morning_report()
-                    pre_market_checked_today = True
-            
-            if current_time == 0:
-                pre_market_checked_today = False
-                
-            if is_market_hours():
-                res = fetch_live_data("HBLENGINE.NS", "5m")
-                price = res[0]
-                if price:
-                    closes, highs, lows, volumes, _, _, tf_res, tf_sup, vol_ratio = res[1:]
-                    st_trend = calc_supertrend(highs, lows, closes)
-                    rsi_vals = calc_rsi_list(closes)
-                    rsi = rsi_vals[-1] if rsi_vals else 50
-                    current_minute = n.strftime("%H:%M")
-                    
-                    # 🎯 HBL બાય ટ્રિગર માટે વોલ્યુમ કન્ડિશન ૧.૩x કરી જેથી એન્ટ્રી મિસ ન થાય
-                    if price >= tf_res and vol_ratio >= 1.3 and st_trend == "BULLISH":
-                        if last_alert_sent != f"BUY_{current_minute}":
-                            msg = f"🔥 <b>[ALGO-BOOST] HBL જેકપોટ બ્રેકઆઉટ ટ્રિગર!</b>\n\n💰 <b>Live Price:</b> ₹{price}\n📊 <b>Vol Jump:</b> {vol_ratio}x\n🚧 <b>Res Broken:</b> ₹{tf_res}\n\n🚨 <b>Action:</b> BUY LONG! તેજી શરૂ!"
-                            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
-                            last_alert_sent = f"BUY_{current_minute}"
-            else:
-                time.sleep(30)
-                continue
-        except:
-            pass
-        time.sleep(15)
-
 class FakeServer(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-type", "text/html")
         self.end_headers()
-        self.wfile.write(b"Bot Engine is Running Perfectly!")
+        self.wfile.write(b"Bot Engine is Live!")
     def do_HEAD(self):
         self.send_response(200)
+        self.send_header("Content-type", "text/html")
         self.end_headers()
 
-# START THREADS
+# START
 threading.Thread(target=lambda: HTTPServer(('', int(os.environ.get("PORT", 10000))), FakeServer).serve_forever(), daemon=True).start()
 threading.Thread(target=background_alerts_worker, daemon=True).start()
 
+# ============================================
+# 🚀 MAIN LOOP (🎯 DUPLICATE LOCK FIX)
+# ============================================
 offset = 0
 while True:
     try:
@@ -393,7 +315,9 @@ while True:
                 u_id = update["update_id"]
                 offset = u_id + 1
                 
-                if u_id in processed_updates: continue
+                # 🎯 પ્રોટેક્શન લોક: જો પ્રોસેસ થઈ ગયો હોય તો અટકાવી દો
+                if u_id in processed_updates: 
+                    continue
                 processed_updates.add(u_id)
                 if len(processed_updates) > 500: processed_updates.clear()
                 
