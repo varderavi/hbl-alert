@@ -36,16 +36,6 @@ def is_market_hours():
     current_time = n.hour * 100 + n.minute
     return 915 <= current_time <= 1530
 
-def get_expiry_alert():
-    n = now_ist()
-    weekday = n.weekday() 
-    if weekday == 0: return "📅 <b>EXPIRY ALERT:</b> આજે <b>MIDCAP SELECT</b> ની એક્સપાયરી છે! 🎯"
-    elif weekday == 1: return "📅 <b>EXPIRY ALERT:</b> આજે <b>FINNIFTY</b> ની ધાંસુ એક્સપાયરી છે! 🎯"
-    elif weekday == 2: return "📅 <b>EXPIRY ALERT:</b> આજે <b>BANKNIFTY</b> નો મોટો દિવસ (Expiry) છે! 🎯"
-    elif weekday == 3: return "📅 <b>EXPIRY ALERT:</b> આજે <b>NIFTY 50</b> નો મેઈન એક્સપાયરી ધડાકો છે! 🎯"
-    elif weekday == 4: return "📅 <b>EXPIRY ALERT:</b> આજે <b>SENSEX</b> ની ધમાકેદાર એક્સપાયરી છે! 🎯"
-    return ""
-
 def get_range_for_interval(interval):
     if interval == "1m": return "1d"
     elif interval in ["5m", "15m", "30m"]: return "2d"
@@ -92,6 +82,44 @@ def fetch_live_data(symbol, interval="5m"):
         return round(price, 2), closes, highs, lows, volumes, round(prev_close, 2), name, tf_resistance, tf_support, vol_ratio
     except:
         return None, [], [], [], [], None, symbol, None, None, 0
+
+def calc_ema(data, p):
+    if len(data) < p: return None
+    k = 2 / (p + 1)
+    e = sum(data[:p]) / p
+    for v in data[p:]: e = v * k + e * (1 - k)
+    return round(e, 2)
+
+def calc_rsi_list(data, p=14):
+    if len(data) < p + 1: return []
+    rsi_history = []
+    gains = []; losses = []
+    for i in range(1, len(data)):
+        diff = data[i] - data[i - 1]
+        if diff > 0: gains.append(diff); losses.append(0.0)
+        else: gains.append(0.0); losses.append(abs(diff))
+    ag = sum(gains[:p]) / p
+    al = sum(losses[:p]) / p
+    rsi_history.append(100.0 - (100.0 / (1.0 + ag / al)) if al else 100.0)
+    for i in range(p, len(gains)):
+        ag = (ag * (p - 1) + gains[i]) / p
+        al = (al * (p - 1) + losses[i]) / p
+        rsi_history.append(100.0 - (100.0 / (1.0 + ag / al)) if al else 100.0)
+    return rsi_history
+
+def calc_supertrend(highs, lows, closes, p=10, mult=3):
+    if len(closes) < p: return "NEUTRAL"
+    tr_sum = 0
+    for i in range(len(closes) - p, len(closes)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i - 1]), abs(lows[i] - closes[i - 1]))
+        tr_sum += tr
+    atr = tr_sum / p
+    mid = (highs[-1] + lows[-1]) / 2
+    upper_band = mid + (mult * atr)
+    lower_band = mid - (mult * atr)
+    if closes[-1] > upper_band: return "BULLISH"
+    elif closes[-1] < lower_band: return "BEARISH"
+    return "NEUTRAL"
 
 # ============================================
 # 📊 REPORT GENERATOR ENGINE
@@ -175,11 +203,11 @@ def send_telegram_msg(text, current_chat_id, reply_markup=None):
     try: requests.post(url, json=payload, timeout=5)
     except: pass
 
-# 🎯 🛠️ મેઈન મેનુ બટન ફિક્સ (GIFT NIFTY સેટ કર્યું)
+# 🎯 🛠️ ફિક્સ મેનુ બટન (GIFT NIFTY ઉમેર્યું)
 def send_main_menu(current_chat_id):
     markup = {
         "inline_keyboard": [
-            [{"text": "⚡ HBL Power", "callback_data": "m_hbl"}, {"text": "🚀 GIFT NIFTY (SGX)", "callback_data": "m_gift"}],
+            [{"text": "🚀 GIFT NIFTY (SGX)", "callback_data": "m_gift"}, {"text": "⚡ HBL Power", "callback_data": "m_hbl"}],
             [{"text": "📊 NIFTY 50", "callback_data": "m_nifty"}, {"text": "📈 BANK NIFTY", "callback_data": "m_bnifty"}],
             [{"text": "💎 SENSEX", "callback_data": "m_sensex"}, {"text": "🚀 NIFTY NEXT 50", "callback_data": "m_next50"}],
             [{"text": "🔥 MIDCAP 100", "callback_data": "m_midcap"}, {"text": "🔍 Search Stock", "callback_data": "m_search"}]
@@ -222,7 +250,7 @@ def check_and_send_morning_report():
         h_chg = round(((h_price - h_close)/h_close)*100, 2)
         msg += f"⚡ <b>HBL POWER પ્રી-ઓપન:</b> ₹{h_price} ({h_chg:+}%)\n"
         
-    msg += f"\n🎯 <b>ટ્રેડિંગ પ્લાન:</b> ૦૯:૧૫ એ માર્કેટ ખુલતા જ આજના એલ્ગો ટ્રિગર્સ એક્ટિવ થઈ જશે."
+    msg += f"\n🎯 <b>ટ્રેડિંગ訊 પ્લાન:</b> ૦૯:૧૫ એ માર્કેટ ખુલતા જ આજના એલ્ગો ટ્રિગર્સ એક્ટિવ થઈ જશે."
     requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
 
 def background_alerts_worker():
@@ -253,39 +281,9 @@ def background_alerts_worker():
                             msg = f"🔥 <b>[ALGO-BOOST] HBL જેકપોટ બ્રેકઆઉટ ટ્રિગર!</b>\n\n💰 <b>Live Price:</b> ₹{price}\n📊 <b>Vol Jump:</b> {vol_ratio}x\n🚧 <b>Res Broken:</b> ₹{tf_res}\n\n🚨 <b>Action:</b> BUY LONG!"
                             requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"})
                             last_alert_sent = f"BUY_{current_minute}"
-            else:
-                time.sleep(30)
-                continue
         except:
             pass
         time.sleep(15)
-
-# ============================================
-# ⚙️ INDICATORS ENGINE
-# ============================================
-def calc_ema(data, p):
-    if len(data) < p: return None
-    k = 2 / (p + 1)
-    e = sum(data[:p]) / p
-    for v in data[p:]: e = v * k + e * (1 - k)
-    return round(e, 2)
-
-def calc_rsi_list(data, p=14):
-    if len(data) < p + 1: return []
-    rsi_history = []
-    gains = []; losses = []
-    for i in range(1, len(data)):
-        diff = data[i] - data[i - 1]
-        if diff > 0: gains.append(diff); losses.append(0.0)
-        else: gains.append(0.0); losses.append(abs(diff))
-    ag = sum(gains[:p]) / p
-    al = sum(losses[:p]) / p
-    rsi_history.append(100.0 - (100.0 / (1.0 + ag / al)) if al else 100.0)
-    for i in range(p, len(gains)):
-        ag = (ag * (p - 1) + gains[i]) / p
-        al = (al * (p - 1) + losses[i]) / p
-        rsi_history.append(100.0 - (100.0 / (1.0 + ag / al)) if al else 100.0)
-    return rsi_history
 
 class FakeServer(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -298,7 +296,7 @@ class FakeServer(BaseHTTPRequestHandler):
         self.send_header("Content-type", "text/html")
         self.end_headers()
 
-# START
+# START THREADS
 threading.Thread(target=lambda: HTTPServer(('', int(os.environ.get("PORT", 10000))), FakeServer).serve_forever(), daemon=True).start()
 threading.Thread(target=background_alerts_worker, daemon=True).start()
 
@@ -315,7 +313,6 @@ while True:
                 u_id = update["update_id"]
                 offset = u_id + 1
                 
-                # 🎯 પ્રોટેક્શન લોક: જો પ્રોસેસ થઈ ગયો હોય તો અટકાવી દો
                 if u_id in processed_updates: 
                     continue
                 processed_updates.add(u_id)
