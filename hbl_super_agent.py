@@ -1,26 +1,36 @@
+import os, requests, time, threading, logging
+from datetime import datetime
+import pytz
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 # ============================================
 # CONFIGURATION
 # ============================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")   # .env ma rakho
 CHAT_ID   = os.getenv("CHAT_ID")
+IST = pytz.timezone("Asia/Kolkata")
+
+logging.basicConfig(filename="bot.log", level=logging.INFO)
+
+POPULAR_STOCKS = {
+    "HBL": "HBLENGINE.NS", "RELIANCE": "RELIANCE.NS", "TCS": "TCS.NS",
+    "INFOSYS": "INFY.NS", "ICICI": "ICICIBANK.NS", "SBI": "SBIN.NS",
+    "ITC": "ITC.NS", "AIRTEL": "BHARTIARTL.NS", "IRCTC": "IRCTC.NS",
+    "ZOMATO": "ZOMATO.NS"
+}
 
 # ============================================
-# ADVANCED INDICATORS
+# HELPERS
 # ============================================
-def calc_macd(data, fast=12, slow=26, signal=9):
-    if len(data) < slow: return None, None
-    fast_ema = calc_ema(data, fast)
-    slow_ema = calc_ema(data, slow)
-    macd_line = fast_ema - slow_ema
-    signal_line = calc_ema([macd_line] * len(data), signal)
-    return round(macd_line, 2), round(signal_line, 2)
+def now_ist():
+    return datetime.now(IST)
 
-def calc_bollinger(data, p=20, mult=2):
-    if len(data) < p: return None, None
-    sma = sum(data[-p:]) / p
-    std = (sum([(x - sma) ** 2 for x in data[-p:]]) / p) ** 0.5
-    upper = round(sma + mult * std, 2)
-    lower = round(sma - mult * std, 2)
-    return upper, lower
-
-# =================================
+def fetch_live_data(symbol, interval="5m"):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range=1d"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        r = requests.get(url, headers=headers, timeout=7)
+        res = r.json()["chart"]["result"][0]
+        price = res["meta"]["regularMarketPrice"]
+        prev_close = res["meta"].get("previousClose", price)
+        closes = [x for x in res["indicators"]["quote"][0]["close
