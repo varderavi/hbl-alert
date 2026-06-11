@@ -168,9 +168,3 @@ while True:
                     txt=update["message"].get("text","")
                     if txt.lower() in ["hi","hello","menu","/start"]:
                         send_main_menu(chat_id)
-                elif "callback_query" in update:
-                    chat_id=update["callback_query"]["message"]["chat"]["id"]
-                    msg_id=update["callback_query"]["message"]["message_id"]
-                    data=update["callback_query"]["data"]
-                    now=time.time()
-                    if chat_id not in last_response_time or now-last_response_time[chat
