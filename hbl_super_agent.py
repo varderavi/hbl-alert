@@ -6,7 +6,6 @@ import pytz
 # CONFIGURATION
 # ============================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID   = os.getenv("CHAT_ID")
 IST = pytz.timezone("Asia/Kolkata")
 FINNHUB_KEY = os.getenv("FINNHUB_KEY")
 
@@ -41,6 +40,22 @@ def fetch_finnhub_quote(symbol, retries=3):
             logging.error(f"Finnhub error {symbol}: {e}")
             time.sleep(1)
     return None, None, None, None
+
+# --- Yahoo Finance Fallback ---
+def fetch_yahoo(symbol, interval="5m", retries=2):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range=1d"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, headers=headers, timeout=7)
+            res = r.json()["chart"]["result"][0]
+            price = res["meta"]["regularMarketPrice"]
+            prev_close = res["meta"].get("previousClose", price)
+            return round(price,2), round(prev_close,2)
+        except Exception as e:
+            logging.error(f"Yahoo error {symbol}: {e}")
+            time.sleep(1)
+    return None, None
 
 # ============================================
 # INDICATORS
@@ -90,15 +105,85 @@ def intraday_prediction(price,res,sup,rsi,macd,boll):
 def generate_report(symbol, source="indian", name="Stock"):
     if source=="indian":
         price, change, p_change = fetch_indian_stock(symbol)
-        if not price: return None,None
-        text = f"""📊 <b>{name} LIVE (NSE)</b>
-💰 Price: ₹{price}
+        if not price:
+            price, prev_close = fetch_yahoo(f"{symbol}.NS")
+            if not price: return "⚠️ NSE data not available.", None
+            change = round(price-prev_close,2); p_change = round((change/prev_close)*100,2)
+            source_label = "Yahoo (Delayed)"
+        else:
+            source_label = "Indian API (Live)"
+        text = f"""📊 <b>{name} LIVE</b>
+💰 Price: ₹{price} | Source: {source_label}
 📈 Change: {change} ({p_change}%)
 ⏰ {now_ist().strftime('%H:%M:%S IST')}"""
     else:
         price, high, low, prev_close = fetch_finnhub_quote(symbol)
-        if not price: return None,None
-        change = round(price-prev_close,2)
-        p_change = round((change/prev_close)*100,2)
-        # Indicators demo with dummy closes
-        closes = [prev_close, price
+        if not price:
+            price, prev_close = fetch_yahoo(symbol)
+            if not price: return "⚠️ SGX data not available.", None
+            high, low = price, price
+            source_label = "Yahoo (Delayed)"
+        else:
+            source_label = "Finnhub (Live)"
+        change = round(price-prev_close,2); p_change = round((change/prev_close)*100,2)
+        closes = [prev_close, price]
+        ema9 = calc_ema(closes,9); rsi = calc_rsi(closes)
+        macd = calc_macd(closes); boll = calc_bollinger(closes)
+        prediction = intraday_prediction(price,high,low,rsi,macd,boll)
+        text = f"""📊 <b>{name} LIVE</b>
+💰 Price: {price} ({change:+} | {p_change:+}%) | Source: {source_label}
+📈 High: {high} | Low: {low}
+📉 Prev Close: {prev_close}
+📊 EMA9: {ema9} | RSI: {rsi}
+⚡ MACD: {macd} | 📊 Bollinger: {boll}
+🔮 Prediction: {prediction}
+⏰ {now_ist().strftime('%H:%M:%S IST')}"""
+    markup = {"inline_keyboard":[
+        [{"text":"⚡ Refresh","callback_data":f"tf_{symbol}_5m"}],
+        [{"text":"🔙 Back","callback_data":"go_main"}]
+    ]}
+    return text,markup
+
+def send_telegram_msg(text,chat_id,reply_markup=None):
+    url=f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload={"chat_id":str(chat_id),"text":text,"parse_mode":"HTML"}
+    if reply_markup: payload["reply_markup"]=reply_markup
+    try: requests.post(url,json=payload,timeout=5)
+    except: pass
+
+# ============================================
+# MAIN MENU
+# ============================================
+def send_main_menu(chat_id):
+    markup={"inline_keyboard":[
+        [{"text":"🚀 SGX NIFTY (Finnhub)","callback_data":"m_sgx"},
+         {"text":"⚡ Reliance (NSE)","callback_data":"m_rel"}],
+        [{"text":"🔍 Search Stock","callback_data":"m_search"}]
+    ]}
+    send_telegram_msg("👋 <b>નમસ્તે રવિ ભાઈ!</b>\n\nChoose source:",chat_id,reply_markup=markup)
+
+# ============================================
+# CALLBACK HANDLER
+# ============================================
+def handle_callback(data,chat_id):
+    if data=="m_sgx":
+        text,markup=generate_report("SGX:NIFTY","finnhub","SGX NIFTY")
+    elif data=="m_rel":
+        text,markup=generate_report("RELIANCE","indian","Reliance")
+    else:
+        text,markup=None,None
+    if text: send_telegram_msg(text,chat_id,reply_markup=markup)
+
+# ============================================
+# MAIN LOOP (Offset + Debounce Fix)
+# ============================================
+offset = 0
+processed_updates = set()
+last_response_time = {}
+
+while True:
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={offset}&timeout=10"
+        r = requests.get(url, timeout=5).json()
+        if "result" in r:
+            for update
