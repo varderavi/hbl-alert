@@ -1,7 +1,53 @@
 import requests
 import pytz
 import xml.etree.ElementTree as ET
-import time
+import timeimport os, asyncio, aiohttp, logging
+from datetime import datetime
+from flask import Flask, jsonify
+from dotenv import load_dotenv
+
+# Load secrets
+load_dotenv()
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID   = os.getenv("CHAT_ID")
+
+# Logging setup
+logging.basicConfig(filename="bot.log", level=logging.INFO)
+
+# Flask dashboard
+app = Flask(__name__)
+
+@app.route("/status")
+def status():
+    return jsonify({"server": "running", "time": datetime.now().strftime("%H:%M:%S")})
+
+# Async fetch
+async def fetch_data(session, symbol, interval="5m"):
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval={interval}&range=1d"
+    try:
+        async with session.get(url) as r:
+            res = await r.json()
+            price = res["chart"]["result"][0]["meta"]["regularMarketPrice"]
+            return symbol, price
+    except Exception as e:
+        logging.error(f"Fetch error {symbol}: {e}")
+        return symbol, None
+
+async def fetch_multiple(symbols):
+    async with aiohttp.ClientSession() as session:
+        tasks = [fetch_data(session, s) for s in symbols]
+        return await asyncio.gather(*tasks)
+
+# Alert throttling
+last_alert_time = {}
+
+def can_alert(symbol, cooldown=600):
+    now = datetime.now().timestamp()
+    if symbol not in last_alert_time or now - last_alert_time[symbol] > cooldown:
+        last_alert_time[symbol] = now
+        return True
+    return False
+
 from datetime import datetime
 import threading
 import os
